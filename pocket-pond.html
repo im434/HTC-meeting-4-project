@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pocket Pond</title>
+<link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --pond: #2f8f9d;
+    --deep: #1d5d6b;
+    --pad: #7cc47f;
+    --petal: #ffb3c7;
+    --ink: #173f47;
+    --paper: #eaf7f2;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    font-family: "Fredoka", "Nunito", "Varela Round", system-ui, sans-serif;
+    background: var(--paper);
+    color: var(--ink);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 20px 14px 28px;
+  }
+  h1 {
+    font-weight: 600;
+    font-size: clamp(2rem, 6vw, 3rem);
+    margin: 0;
+    letter-spacing: -0.02em;
+  }
+  .sub { margin: 4px 0 16px; font-size: 1.05rem; opacity: 0.8; }
+  .pond-wrap {
+    position: relative;
+    width: min(760px, 100%);
+    aspect-ratio: 4 / 3;
+    border-radius: 48% 52% 46% 54% / 55% 48% 52% 45%;
+    overflow: hidden;
+    border: 10px solid #b9dcc6;
+    box-shadow: inset 0 0 60px rgba(10, 50, 60, 0.45);
+    background: radial-gradient(ellipse at 40% 35%, var(--pond), var(--deep));
+    transition: filter 1.2s ease;
+  }
+  .pond-wrap.night { filter: brightness(0.55) saturate(0.8) hue-rotate(15deg); }
+  canvas { width: 100%; height: 100%; display: block; cursor: pointer; touch-action: manipulation; }
+  .bubble {
+    position: absolute;
+    background: #fff;
+    color: var(--ink);
+    padding: 7px 12px;
+    border-radius: 16px;
+    font-size: 0.95rem;
+    pointer-events: none;
+    transform: translate(-50%, -130%);
+    white-space: nowrap;
+    box-shadow: 0 3px 0 rgba(23, 63, 71, 0.2);
+    animation: pop 0.25s ease-out;
+  }
+  .bubble b { font-weight: 600; }
+  @keyframes pop { from { transform: translate(-50%, -110%) scale(0.6); opacity: 0; } }
+  .controls { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; margin-top: 18px; }
+  button {
+    font: inherit;
+    font-size: 1rem;
+    border: none;
+    border-radius: 999px;
+    padding: 10px 20px;
+    background: var(--pad);
+    color: var(--ink);
+    cursor: pointer;
+    box-shadow: 0 4px 0 #4f9a55;
+    transition: transform 0.08s;
+  }
+  button:active { transform: translateY(3px); box-shadow: 0 1px 0 #4f9a55; }
+  button.pink { background: var(--petal); box-shadow: 0 4px 0 #e0809c; }
+  button.pink:active { box-shadow: 0 1px 0 #e0809c; }
+  button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
+  .stats { margin-top: 14px; font-size: 0.95rem; opacity: 0.75; text-align: center; }
+  @media (prefers-reduced-motion: reduce) { .bubble { animation: none; } }
+</style>
+</head>
+<body>
+  <h1>Pocket Pond</h1>
+  <p class="sub">Tap the water to drop food. Tap a fish to hear what it's thinking.</p>
+
+  <div class="pond-wrap" id="wrap">
+    <canvas id="pond" aria-label="A pond with fish. Click to drop food."></canvas>
+  </div>
+
+  <div class="controls">
+    <button id="addFish">Add a fish</button>
+    <button id="sprinkle" class="pink">Sprinkle food</button>
+    <button id="lights">Turn the lights down</button>
+  </div>
+  <p class="stats" id="stats"></p>
+
+<script>
+(() => {
+  const canvas = document.getElementById('pond');
+  const ctx = canvas.getContext('2d');
+  const wrap = document.getElementById('wrap');
+  const stats = document.getElementById('stats');
+  const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  let W = 0, H = 0, dpr = 1;
+  function resize() {
+    dpr = window.devicePixelRatio || 1;
+    const r = canvas.getBoundingClientRect();
+    W = r.width; H = r.height;
+    canvas.width = W * dpr; canvas.height = H * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  const names = ['Mochi','Bean','Pickle','Tofu','Noodle','Biscuit','Pebble','Dumpling','Sprout','Waffle','Kiwi','Momo','Gnocchi','Button','Sushi-not-sushi'];
+  const thoughts = ['is that food?','blub.','i love this pond','have you seen my tail?','swimming is my cardio','i am a very big fish','nap time soon','hello!!','i ate a bubble once','the lily pads are gossiping','feeling fin-tastic','just keep swimming'];
+  const nightThoughts = ['shh, sleepy…','are those fireflies?','zzz…','goodnight moon, goodnight pad'];
+  const palettes = [
+    ['#ff8a5c','#fff4ea'], ['#ffd166','#ffffff'], ['#ff6f91','#ffe3ec'],
+    ['#f7f7f2','#ff7b54'], ['#ffa62b','#2b2b2b'], ['#c3aed6','#ffffff']
+  ];
+
+  const fish = [], food = [], ripples = [], hearts = [], fireflies = [];
+  let eaten = 0, night = false, nameIdx = 0;
+
+  const pads = Array.from({ length: 4 }, (_, i) => ({
+    x: Math.random(), y: Math.random(), r: 30 + Math.random() * 22,
+    rot: Math.random() * 6.28, spin: (Math.random() - 0.5) * 0.002, flower: i % 2 === 0
+  }));
+
+  function addFish(x, y) {
+    const [body, spot] = palettes[Math.floor(Math.random() * palettes.length)];
+    fish.push({
+      x: x ?? W * (0.2 + Math.random() * 0.6),
+      y: y ?? H * (0.2 + Math.random() * 0.6),
+      a: Math.random() * 6.28, speed: 0.6 + Math.random() * 0.5,
+      size: 14 + Math.random() * 6, body, spot,
+      wiggle: Math.random() * 10, turn: 0,
+      name: names[nameIdx++ % names.length]
+    });
+    updateStats();
+  }
+
+  function dropFood(x, y) {
+    for (let i = 0; i < 3; i++) {
+      food.push({ x: x + (Math.random() - 0.5) * 22, y: y + (Math.random() - 0.5) * 22, life: 1, bob: Math.random() * 6 });
+    }
+    ripples.push({ x, y, r: 4, o: 0.8 });
+  }
+
+  function updateStats() {
+    const n = fish.length;
+    stats.textContent = `${n} fish in the pond · ${eaten} snacks eaten`;
+  }
+
+  let bubbleEl = null, bubbleFish = null, bubbleTimer = null;
+  function speak(f) {
+    if (bubbleEl) bubbleEl.remove();
+    clearTimeout(bubbleTimer);
+    bubbleEl = document.createElement('div');
+    bubbleEl.className = 'bubble';
+    const pool = night ? nightThoughts : thoughts;
+    bubbleEl.innerHTML = `<b>${f.name}:</b> ${pool[Math.floor(Math.random() * pool.length)]}`;
+    wrap.appendChild(bubbleEl);
+    bubbleFish = f;
+    hearts.push({ x: f.x, y: f.y - f.size, o: 1 });
+    bubbleTimer = setTimeout(() => { bubbleEl && bubbleEl.remove(); bubbleEl = null; bubbleFish = null; }, 2600);
+  }
+
+  canvas.addEventListener('click', e => {
+    const r = canvas.getBoundingClientRect();
+    const x = e.clientX - r.left, y = e.clientY - r.top;
+    const hit = fish.find(f => Math.hypot(f.x - x, f.y - y) < f.size * 1.6);
+    if (hit) { speak(hit); ripples.push({ x, y, r: 4, o: 0.5 }); }
+    else dropFood(x, y);
+  });
+
+  document.getElementById('addFish').onclick = () => {
+    if (fish.length >= 14) { stats.textContent = 'The pond is full. 14 fish is plenty!'; return; }
+    addFish();
+  };
+  document.getElementById('sprinkle').onclick = () => {
+    for (let i = 0; i < 5; i++) dropFood(W * (0.15 + Math.random() * 0.7), H * (0.15 + Math.random() * 0.7));
+  };
+  const lightsBtn = document.getElementById('lights');
+  lightsBtn.onclick = () => {
+    night = !night;
+    wrap.classList.toggle('night', night);
+    lightsBtn.textContent = night ? 'Turn the lights up' : 'Turn the lights down';
+    fireflies.length = 0;
+    if (night) for (let i = 0; i < 12; i++) fireflies.push({ x: Math.random(), y: Math.random(), t: Math.random() * 6 });
+  };
+
+  function angleDiff(a, b) {
+    let d = b - a;
+    while (d > Math.PI) d -= Math.PI * 2;
+    while (d < -Math.PI) d += Math.PI * 2;
+    return d;
+  }
+
+  function update(dt) {
+    const pace = night ? 0.5 : 1;
+    for (const f of fish) {
+      let target = null, best = Infinity;
+      for (const p of food) {
+        const d = Math.hypot(p.x - f.x, p.y - f.y);
+        if (d < best) { best = d; target = p; }
+      }
+      let desired = f.a;
+      let sp = f.speed * pace;
+      if (target && best < 260) {
+        desired = Math.atan2(target.y - f.y, target.x - f.x);
+        sp *= 1.9;
+        if (best < f.size * 0.8) {
+          target.life = 0; eaten++;
+          f.size = Math.min(f.size + 0.6, 30);
+          hearts.push({ x: f.x, y: f.y - f.size, o: 1 });
+          updateStats();
+        }
+      } else {
+        f.turn += (Math.random() - 0.5) * 0.02;
+        f.turn *= 0.96;
+        desired = f.a + f.turn;
+      }
+      const m = 50;
+      if (f.x < m || f.x > W - m || f.y < m || f.y > H - m) desired = Math.atan2(H / 2 - f.y, W / 2 - f.x);
+      f.a += angleDiff(f.a, desired) * 0.05;
+      f.x += Math.cos(f.a) * sp * dt;
+      f.y += Math.sin(f.a) * sp * dt;
+      f.wiggle += 0.15 * sp * dt;
+    }
+    for (let i = food.length - 1; i >= 0; i--) {
+      food[i].bob += 0.05 * dt;
+      food[i].life -= 0.0008 * dt;
+      if (food[i].life <= 0) food.splice(i, 1);
+    }
+    for (let i = ripples.length - 1; i >= 0; i--) {
+      ripples[i].r += 1.2 * dt; ripples[i].o -= 0.015 * dt;
+      if (ripples[i].o <= 0) ripples.splice(i, 1);
+    }
+    for (let i = hearts.length - 1; i >= 0; i--) {
+      hearts[i].y -= 0.6 * dt; hearts[i].o -= 0.02 * dt;
+      if (hearts[i].o <= 0) hearts.splice(i, 1);
+    }
+    for (const p of pads) p.rot += p.spin * dt;
+    for (const ff of fireflies) ff.t += 0.03 * dt;
+  }
+
+  function drawFish(f) {
+    const s = f.size, sw = Math.sin(f.wiggle) * 0.35;
+    ctx.save();
+    ctx.translate(f.x, f.y);
+    ctx.rotate(f.a);
+    // shadow
+    ctx.fillStyle = 'rgba(0,30,40,0.18)';
+    ctx.beginPath(); ctx.ellipse(4, 8, s * 1.2, s * 0.7, 0, 0, 6.28); ctx.fill();
+    // tail
+    ctx.save();
+    ctx.translate(-s * 0.9, 0); ctx.rotate(sw);
+    ctx.fillStyle = f.body;
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.quadraticCurveTo(-s * 0.9, -s * 0.9, -s * 1.1, -s * 0.5);
+    ctx.quadraticCurveTo(-s * 0.7, 0, -s * 1.1, s * 0.5);
+    ctx.quadraticCurveTo(-s * 0.9, s * 0.9, 0, 0);
+    ctx.fill();
+    ctx.restore();
+    // fins
+    ctx.fillStyle = f.body;
+    ctx.globalAlpha = 0.8;
+    ctx.beginPath(); ctx.ellipse(0, -s * 0.65, s * 0.35, s * 0.18, -0.6 + sw, 0, 6.28); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(0, s * 0.65, s * 0.35, s * 0.18, 0.6 - sw, 0, 6.28); ctx.fill();
+    ctx.globalAlpha = 1;
+    // body
+    ctx.beginPath(); ctx.ellipse(0, 0, s * 1.15, s * 0.68, 0, 0, 6.28); ctx.fill();
+    // spot
+    ctx.fillStyle = f.spot;
+    ctx.beginPath(); ctx.ellipse(-s * 0.2, -s * 0.15, s * 0.35, s * 0.25, 0.4, 0, 6.28); ctx.fill();
+    // eyes
+    const blink = night ? 0.15 : 1;
+    ctx.fillStyle = '#173f47';
+    for (const side of [-1, 1]) {
+      ctx.beginPath(); ctx.ellipse(s * 0.65, side * s * 0.3, s * 0.1, s * 0.1 * blink, 0, 0, 6.28); ctx.fill();
+    }
+    // blush
+    ctx.fillStyle = 'rgba(255,120,150,0.45)';
+    for (const side of [-1, 1]) {
+      ctx.beginPath(); ctx.arc(s * 0.45, side * s * 0.45, s * 0.1, 0, 6.28); ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  function drawPad(p) {
+    const x = p.x * W, y = p.y * H;
+    ctx.save();
+    ctx.translate(x, y); ctx.rotate(p.rot);
+    ctx.fillStyle = '#7cc47f';
+    ctx.beginPath(); ctx.moveTo(0, 0); ctx.arc(0, 0, p.r, 0.35, 6.0); ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = '#5fa863'; ctx.lineWidth = 1.5;
+    for (let i = 0; i < 5; i++) {
+      const a = 0.9 + i * 1.05;
+      ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(Math.cos(a) * p.r * 0.8, Math.sin(a) * p.r * 0.8); ctx.stroke();
+    }
+    if (p.flower) {
+      ctx.fillStyle = '#ffb3c7';
+      for (let i = 0; i < 6; i++) {
+        ctx.save(); ctx.rotate(i * 1.047);
+        ctx.beginPath(); ctx.ellipse(0, -8, 5, 9, 0, 0, 6.28); ctx.fill();
+        ctx.restore();
+      }
+      ctx.fillStyle = '#ffd166';
+      ctx.beginPath(); ctx.arc(0, 0, 4.5, 0, 6.28); ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  function drawHeart(h) {
+    ctx.save();
+    ctx.globalAlpha = Math.max(h.o, 0);
+    ctx.fillStyle = '#ff6f91';
+    ctx.translate(h.x, h.y); ctx.scale(0.6, 0.6);
+    ctx.beginPath();
+    ctx.moveTo(0, 6);
+    ctx.bezierCurveTo(-14, -4, -8, -16, 0, -8);
+    ctx.bezierCurveTo(8, -16, 14, -4, 0, 6);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function draw() {
+    ctx.clearRect(0, 0, W, H);
+    // light caustics
+    const t = performance.now() / 1000;
+    ctx.fillStyle = 'rgba(255,255,255,0.05)';
+    for (let i = 0; i < 6; i++) {
+      const cx = W * (0.15 + 0.14 * i) + Math.sin(t * 0.4 + i) * 20;
+      const cy = H * (0.3 + 0.4 * ((i * 37) % 10) / 10) + Math.cos(t * 0.3 + i) * 15;
+      ctx.beginPath(); ctx.ellipse(cx, cy, 60, 22, i, 0, 6.28); ctx.fill();
+    }
+    for (const p of food) {
+      ctx.fillStyle = `rgba(214,150,90,${Math.min(p.life * 2, 1)})`;
+      ctx.beginPath(); ctx.arc(p.x, p.y + Math.sin(p.bob) * 1.5, 3.2, 0, 6.28); ctx.fill();
+    }
+    for (const f of fish) drawFish(f);
+    for (const r of ripples) {
+      ctx.strokeStyle = `rgba(255,255,255,${r.o})`; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(r.x, r.y, r.r, 0, 6.28); ctx.stroke();
+    }
+    for (const p of pads) drawPad(p);
+    for (const h of hearts) drawHeart(h);
+    for (const ff of fireflies) {
+      const x = ff.x * W + Math.sin(ff.t) * 30, y = ff.y * H + Math.cos(ff.t * 0.7) * 20;
+      const glow = 0.5 + Math.sin(ff.t * 3) * 0.5;
+      ctx.fillStyle = `rgba(255,240,150,${0.3 + glow * 0.7})`;
+      ctx.shadowColor = '#fff59d'; ctx.shadowBlur = 14;
+      ctx.beginPath(); ctx.arc(x, y, 3, 0, 6.28); ctx.fill();
+      ctx.shadowBlur = 0;
+    }
+    if (bubbleEl && bubbleFish) {
+      bubbleEl.style.left = (bubbleFish.x / W * 100) + '%';
+      bubbleEl.style.top = ((bubbleFish.y - bubbleFish.size) / H * 100) + '%';
+    }
+  }
+
+  let last = performance.now();
+  function loop(now) {
+    const dt = Math.min((now - last) / 16.67, 3);
+    last = now;
+    if (W !== canvas.getBoundingClientRect().width) resize();
+    update(reduced ? dt * 0.6 : dt);
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  for (let i = 0; i < 4; i++) addFish();
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
